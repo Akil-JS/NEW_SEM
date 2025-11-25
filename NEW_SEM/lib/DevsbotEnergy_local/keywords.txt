@@ -1,0 +1,12 @@
+#######################################
+# Data types (KEYWORD1)
+#######################################
+Devsbot     KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+begin        KEYWORD2
+Loop          KEYWORD2
+devsbotDelay        KEYWORD2
+sendVirtualWrite    KEYWORD2
