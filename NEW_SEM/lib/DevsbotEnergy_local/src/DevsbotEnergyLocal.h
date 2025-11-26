@@ -38,7 +38,7 @@
 #include <sdcard.h>
 #include <ESPAsyncWebServer.h>
 #include "DigitalInput.h"
-
+#include "DIO_Module.h" 
 
 extern TaskHandle_t sdCardTaskHandle;
 extern TaskHandle_t dataTaskHandle;
@@ -210,6 +210,9 @@ class Devsbot
             bool sendDIStatusData(String& payload);
             bool sendDIPulseData(String& payload);
 
+            // DIO Module Instance
+            DIO_Module dioModule; // <-- Added Instance
+
 
           
 
@@ -371,6 +374,8 @@ class Devsbot
 
     bool _needsPostConnectionSetup;
     bool _isInitialized; // <-- ADD THIS FLAG
+
+            void parseDIOConfiguration(); // <-- Added Helper Method
 
 
 
