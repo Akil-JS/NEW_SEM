@@ -22,23 +22,7 @@ Devsbot::Devsbot() {
     // No additional initialization needed
 }
 
-// Devsbot::Devsbot() {
-//     // Initialize dynamic configuration arrays
-//     dynamicDioPins = nullptr;
-//     dynamicDioModes = nullptr;
-//     dynamicDioPinCount = 0;
-    
-//     dynamicSlaveIds = nullptr;
-//     dynamicSlaveCount = 0;
-//     dynamicRegisters = nullptr;
-//     dynamicRegisterCount = 0;
-    
-//     // Default RS485 configuration
-//     dynamicBaudRate = 9600;
-//     dynamicDataBits = 8;
-//     dynamicParity = 0;
-//     dynamicStopBits = 1;
-// }
+
 
 Devsbot::~Devsbot() {
     // Cleanup dynamic arrays
@@ -168,6 +152,90 @@ bool Devsbot::parseMeterConfiguration() {
     
     return true;
 }
+
+// [ADD THIS NEW METHOD]
+void Devsbot::parseDIOConfiguration() {
+    if (!SPIFFS.exists("/Devsbot_Widget.json")) {
+        DEBUG("[DIO] No widget configuration file found.");
+        return;
+    }
+
+    File file = SPIFFS.open("/Devsbot_Widget.json", "r");
+    if (!file) {
+        DEBUG("[DIO] Failed to open widget config file.");
+        return;
+    }
+
+    String data = file.readString();
+    file.close();
+
+    DynamicJsonDocument doc(4096);
+    DeserializationError error = deserializeJson(doc, data);
+
+    if (error) {
+        DEBUG("[DIO] JSON parsing failed: " + String(error.c_str()));
+        return;
+    }
+
+    bool dioFound = false;
+    DIO_Module::Config config;
+    config.enabled = false;
+
+    // Iterate through widget array
+    for (JsonVariant elem : doc.as<JsonArray>()) {
+        String pinMode = elem["pinmode"];
+        // Check for "IO" pinmode which indicates the DIO module
+        if (pinMode == "IO") {
+            DEBUG("[DIO] Found IO module configuration.");
+            JsonArray conf = elem["conf"];
+            if (conf.size() > 0) {
+                JsonObject item = conf[0];
+                
+                config.enabled = true;
+                config.slaveId = item["slave_id"].as<uint8_t>();
+                config.baudRate = item["baudrate"].as<uint32_t>();
+                
+                // Handle Parity/StopBits
+                // Default to 8N1
+                config.config = SERIAL_8N1; 
+                
+                // If JSON provides specific parity/stopbits
+                if (item.containsKey("parity") && item.containsKey("stopbits")) {
+                    String parityStr = item["parity"].as<String>();
+                    int stopBits = item["stopbits"].as<int>();
+                    
+                    if (parityStr == "N") {
+                        if (stopBits == 1) config.config = SERIAL_8N1;
+                        else if (stopBits == 2) config.config = SERIAL_8N2;
+                    } else if (parityStr == "E") {
+                        if (stopBits == 1) config.config = SERIAL_8E1;
+                        else if (stopBits == 2) config.config = SERIAL_8E2;
+                    } else if (parityStr == "O") {
+                        if (stopBits == 1) config.config = SERIAL_8O1;
+                        else if (stopBits == 2) config.config = SERIAL_8O2;
+                    }
+                }
+                
+                // Pins are handled by the DIO_Module class based on Gateway Type, 
+                // but we pass placeholders here.
+                config.rxPin = -1; 
+                config.txPin = -1;
+
+                dioFound = true;
+                // Assuming one DIO module for now, we can break
+                break; 
+            }
+        }
+    }
+
+    if (dioFound) {
+        DEBUG("[DIO] Configuration loaded. Initializing module...");
+        dioModule.begin(config);
+    } else {
+        DEBUG("[DIO] No configuration found. Module disabled.");
+    }
+}
+
 
 // NEW METHOD: Initialize DIO pins
 void Devsbot::initializeDIOPins() {
@@ -554,114 +622,6 @@ void Devsbot::parseNetworkData(const String& data) {
     }
 }
 
-// void Devsbot::begin() {
-//     WiFi.onEvent(std::bind(&Devsbot::WiFiEvent, this, std::placeholders::_1));
-//     DEBUG("Hello i am devsbot...!\n");
-//     DEBUG("passing only a macid\n");
-//     Serial.print("MAC ID : "); Serial.println(WiFi.macAddress());
-
-//     // Initialize the SPIFFS file system
-//     while (!SPIFFS.begin(true)) {
-//         DEBUG("Failed to initialize SPIFFS, retrying...");
-//         delay(1000);
-//     }
-//     DEBUG("SPIFFS was Successfully initialized\n");
-    
-//     // Create HTTP mutex
-//     xHttpMutex = xSemaphoreCreateMutex();
-//     if (xHttpMutex == NULL) {
-//         DEBUG("Failed to create mutex");
-//     }
-
-//     // Load server configuration - this determines if we proceed with server operations
-//     bool serverConfigExists = loadServerConfig();
-    
-//     // If no server config, don't set defaults and don't proceed with server operations
-//     if (!serverConfigExists) {
-//         DEBUG("[Devsbot] No server configuration available");
-//         DEBUG("[Devsbot] Running in local mode - AP and WiFi only");
-
-//         // Set local mode flag to prevent server API calls
-//         localModeOnly = true;
-        
-//         // Still handle network configuration for local operations
-//         EEPROMfirmwareVersion();
-        
-//         // Check if network data file exists for WiFi connection
-//         if (SPIFFS.exists("/network_data.json")) {
-//             String networkData = readFileFromSPIFFS("/network_data.json");
-//             DEBUG("Network data found: " + networkData);
-            
-//             // Parse and connect to WiFi (for local operations)
-//             parseNetworkData(networkData);
-            
-//             if (notConnetedtoNetwork || WiFi.status() != WL_CONNECTED) {
-//                 DEBUG("WiFi connection failed, starting AP mode");
-//                 startAPMode();
-//             } else {
-//                 DEBUG ("WiFi connected - ready for local operations");
-//             }
-//         } else {
-//             // No network config found, start AP mode immediately
-//             DEBUG("No network configuration found, starting AP mode");
-//             notConnetedtoNetwork = 1;
-//             startAPMode();
-//         }
-        
-//         // Handle meter configuration if exists (for local operations)
-//         if (SPIFFS.exists("/meter_Address.json")) {
-//             meterAddressData();
-//             meterAddInSpiff = 1;
-//         }
-        
-//         // Don't call AuthToken or any server-related functions
-//         return;
-//     }
-
-//     // Server config exists - proceed with full initialization
-//     Serial.println("[Devsbot] Server configuration loaded - full mode enabled");
-//     localModeOnly = false;  // Enable server operations
-    
-//     // Check pre-provision data and save to network file if needed
-//     if ((!devicePreProvisionData()) && (!SPIFFS.exists("/network_data.json"))) {
-//         Serial.printf("Save the SSID and password from preprovision to network file\n");
-//         saveNetworkData(preSsid, prePassword, String(deviceconnectivity));
-//     }
-
-//     EEPROMfirmwareVersion();
-
-//     // Check if network data file exists
-//     if (SPIFFS.exists("/network_data.json")) {
-//         String networkData = readFileFromSPIFFS("/network_data.json");
-//         Serial.println("Network data found: " + networkData);
-        
-//         // Parse the network data and configure the network settings
-//         parseNetworkData(networkData);
-
-//         // Only call AuthToken if network configuration is successful AND server config exists
-//         if (!notConnetedtoNetwork && WiFi.status() == WL_CONNECTED) {
-//             AuthToken(NULL);
-//         } else {
-//             Serial.println("Network connection failed, starting AP mode");
-//             startAPMode();
-//         }
-//     } else {
-//         notConnetedtoNetwork = 1;
-//         if (SPIFFS.exists("/meter_Address.json")) {
-//             meterAddressData();
-//             meterAddInSpiff = 1;
-//         }
-        
-//         // No network config found, start AP mode immediately
-//         Serial.println("No network configuration found, starting AP mode");
-//         startAPMode();
-//     }
-//     initialize();
-//         // --- ADD THIS LINE ---
-//     // Start the sensor task once, after all initial setup is complete.
-//     startSensorTask();
-
-// }
 
 
 void Devsbot::begin() {
@@ -767,10 +727,6 @@ void Devsbot::startSensorTask() {
     digitalInput.startSensorTask();
 }
 
-
-// void Devsbot::initialize() {
-//     digitalInput.initialize(this, &card, xHttpMutex);
-// }
 
 /**
  * @brief Starts the Access Point in a non-blocking way.
@@ -908,224 +864,6 @@ void Devsbot::EEPROMfirmwareVersion() {
  * @param callerName A descriptive name for the calling function, used for logging.
  * @return The server's response string, or an error code/status as a string.
  */
-// String Devsbot::sendHttpRequest(String endpoint, String payload, const char* method, const char* contentType, const char* callerName) 
-// {
-//     // --- 1. Structured Request Logging ---
-//     String logHeader = "\n========================================\n";
-//     logHeader += "[HTTP Request] Caller: [" + String(callerName) + "]\n";
-//     logHeader += "----------------------------------------\n";
-//     logHeader += "  - Method:     " + String(method) + "\n";
-//     logHeader += "  - Endpoint:   " + endpoint + "\n";
-//     if (payload != "") {
-//         logHeader += "  - Payload:    " + payload + "\n";
-//     } else {
-//         logHeader += "  - Payload:    <none for GET/OTA request>\n";
-//     }
-//     logHeader += "----------------------------------------";
-//     DEBUG(logHeader);
-
-//     String responseString = "";
-//     HTTPClient httpClient;
-//     const TickType_t mutexTimeout = pdMS_TO_TICKS(5000);
-    
-//     if (xSemaphoreTake(xHttpMutex, mutexTimeout) == pdTRUE) 
-//     {
-//         if (wifiStatus == 0) {
-//             DEBUG("  - Result:     ABORTED (WiFi Disconnected)");
-//             DEBUG("========================================");
-//             xSemaphoreGive(xHttpMutex);
-//             return "WIFI_DISCONNECTED";
-//         }
-
-//         httpMethodTaken = 1;
-//         uint8_t provisionCnt = 0;
-//         int statusCode = 0;
-
-//         // --- Special Handling for OTA ---
-//         // (This logic remains verbose as OTA is a critical, long-running process)
-//         if (strcmp(method, "OTA") == 0) 
-//         {
-//             logHeader = "\n========================================\n";
-//             logHeader += "[HTTP Request] Caller: [" + String(callerName) + "]\n";
-//             logHeader += "----------------------------------------\n";
-//             logHeader += "  - Method:     " + String(method) + "\n";
-//             logHeader += "  - Endpoint:   " + endpoint + "\n";
-//             logHeader += "----------------------------------------";
-//             DEBUG(logHeader);
-            
-//             httpClient.begin(endpoint);
-//             httpClient.addHeader("Authorization", "Bearer " + jwtToken);
-//             statusCode = httpClient.GET();
-
-//             if (statusCode == 200) 
-//               {
-//                 int contentLength = httpClient.getSize();
-//                 if (contentLength <= 0) {
-//                     DEBUG("  - Result:     FAILED | OTA Error: Invalid content length received from server.");
-//                     responseString = "OTA_BAD_LENGTH";
-//                 } else if (!Update.begin(contentLength)) {
-//                     DEBUG("  - Result:     FAILED | OTA Error: Not enough space.");
-//                     responseString = "OTA_NO_SPACE";
-//                 } 
-//                 else 
-//                  {
-// // Replace the progress bar section in your OTA download while loop
-
-// DEBUG("  - OTA Update: Starting download of " + String(contentLength) + " bytes...");
-// WiFiClient* stream = httpClient.getStreamPtr();
-// size_t written = 0;
-// uint8_t buff[1024] = { 0 };
-
-// // --- Progress Bar Variables ---
-// const int progressBarWidth = 40;
-// int lastPrintedPercentage = -1;
-// const int updateInterval = 10; // Update every 10% instead of every 1%
-// // --- End Progress Bar Variables ---
-
-// while (httpClient.connected() && written < contentLength) {
-//     if (wifiStatus == 0) {
-//         DEBUG("  - Result:     FAILED | OTA Error: WiFi lost during download.");
-//         Update.end(false);
-//         responseString = "OTA_WIFI_LOST";
-//         goto cleanup;
-//     }
-    
-//     size_t available = stream->available();
-//     if (available) {
-//         int len = stream->readBytes(buff, min((size_t)1024, available));
-//         if (Update.write(buff, len) != len) {
-//             DEBUG("  - Result:     FAILED | OTA Error: Flash write failed.");
-//             Update.end(false);
-//             responseString = "OTA_WRITE_FAIL";
-//             goto cleanup;
-//         }
-//         written += len;
-
-//         // --- Update Progress Bar Every 10% ---
-//         int currentPercentage = (written * 100) / contentLength;
-//         int roundedPercentage = (currentPercentage / updateInterval) * updateInterval;
-        
-//         // Print only at 10%, 20%, 30%, ... 90%, 100%
-//         if (roundedPercentage > lastPrintedPercentage && roundedPercentage >= updateInterval) {
-//             lastPrintedPercentage = roundedPercentage;
-//             int progressChars = (roundedPercentage * progressBarWidth) / 100;
-
-//             // Build progress bar string
-//             String progressBar = "  [";
-//             for (int i = 0; i < progressBarWidth; ++i) {
-//                 progressBar += (i < progressChars) ? "=" : " ";
-//             }
-//             progressBar += "] " + String(roundedPercentage) + "%";
-            
-//             // Use DEBUG macro for consistent logging
-//             DEBUG(progressBar);
-//         }
-//         // --- End Progress Bar Update ---
-
-//     } else {
-//         vTaskDelay(pdMS_TO_TICKS(5));
-//     }
-// }
-
-// // Continue with the rest of your completion checks...
-// if (written != contentLength) {
-//     DEBUG("  - Result:     FAILED | OTA Error: Download incomplete. Expected " + String(contentLength) + ", got " + String(written));
-//     Update.end(false);
-//     responseString = "OTA_INCOMPLETE_DOWNLOAD";
-// } else if (Update.end(true)) {
-//     if(Update.isFinished()) {
-//         DEBUG("  - Result:     SUCCESS | OTA Update Completed & Verified.");
-//         responseString = "OTA_SUCCESS";
-//     } else {
-//         DEBUG("  - Result:     FAILED | OTA Error: Update.end() successful, but isFinished() is false.");
-//         responseString = "OTA_INCOMPLETE";
-//     }
-// } else {
-//     DEBUG("  - Result:     FAILED | OTA Error Code: " + String(Update.getError()));
-//     responseString = "OTA_ERROR";
-// }
-//                   }
-//                 } 
-//                   else 
-//                   {
-//                  // Handle initial GET request failure
-//                  if (statusCode < 0) {
-//                     DEBUG("  - Result:     FAILED | Code: " + String(statusCode) + " (" + httpClient.errorToString(statusCode) + ")");
-//                  } else {
-//                     DEBUG("  - Result:     FAILED | Server Error Code: " + String(statusCode));
-//                  }
-//                  responseString = "OTA_START_FAILED_" + String(statusCode); // More specific error
-//             }
-//         } // End if (strcmp(method, "OTA") == 0)
-
-//         // --- Standard GET/POST with Retry Logic ---
-//         else 
-//         {
-//             while (provisionCnt < apiHitCnt) 
-//             {
-//                 provisionCnt++;
-//                 DEBUG("  - Attempt " + String(provisionCnt) + "/" + String(apiHitCnt) + "...");
-
-//                 if (wifiStatus == 0) {
-//                     DEBUG("  - Result:     ABORTED (WiFi lost during retry)");
-//                     statusCode = -100; // Custom code for wifi lost
-//                     goto cleanup;
-//                 }
-
-//                 httpClient.setTimeout(10000);
-                
-//                 httpClient.begin(endpoint);
-//                 httpClient.addHeader("Authorization", "Bearer " + jwtToken);
-                
-//                 // *** THIS IS THE CRITICAL FIX ***
-//                 // The Content-Type is now passed in as a parameter, not hardcoded.
-//                 httpClient.addHeader("Content-Type", contentType);
-
-//                 if (strcmp(method, "POST") == 0) {
-//                     statusCode = httpClient.POST(payload);
-//                 } else { // GET
-//                     statusCode = httpClient.GET();
-//                 }
-
-//                 if (statusCode > 0) { // Check for a valid HTTP response code
-//                     responseString = httpClient.getString();
-//                     if (statusCode == 200 || statusCode == 201) {
-//                         DEBUG("  - Result:     SUCCESS | Code: " + String(statusCode));
-//                         DEBUG("  - Response: " + responseString);
-//                         break; 
-//                     } else {
-//                          DEBUG("  - Result:     FAILED | Server Error Code: " + String(statusCode));
-//                          DEBUG("  - Response: " + responseString);
-//                     }
-//                 } else { // Handle negative error codes from the library
-//                     DEBUG("  - Result:     FAILED | Code: " + String(statusCode) + " (" + httpClient.errorToString(statusCode) + ")");
-//                 }
-                
-//                 httpClient.end();
-//                 if (provisionCnt >= apiHitCnt) {
-//                     DEBUG("----------------------------------------");
-//                     DEBUG("--> Request failed after all " + String(apiHitCnt) + " retries.");
-//                     break;
-//                 }
-//                 vTaskDelay(pdMS_TO_TICKS(1000));
-//             }
-//         }
-
-//     cleanup: // Single exit point for cleanup
-//         httpClient.end();
-//         httpMethodTaken = 0;
-//         xSemaphoreGive(xHttpMutex);
-//         DEBUG("========================================");
-
-//         return (responseString != "") ? responseString : String(statusCode);
-//     } 
-//     else 
-//     {
-//         DEBUG("\n--> DEADLOCK DETECTED: HTTP mutex was busy for >5 seconds! Request from [" + String(callerName) + "] was blocked.");
-//         httpMethodTaken = 0;
-//         return "MUTEX_TIMEOUT_DEADLOCK";
-//     }
-// }
 
 
 // --- MODIFIED sendHttpRequest to skip retries for batch sends ---
@@ -1440,89 +1178,6 @@ bool Devsbot::postDataToServer(uint8_t slaveid,uint8_t virtualpin,bool Status)
 
 
 
-// void Devsbot::AuthToken(const char* authToken) // authtoken is sent form a macro hardcoded
-// {
-//     if (!canPerformServerOperations()) {
-//         DEBUG("[Devsbot] Skipping AuthToken - server operations disabled");
-//         return;
-//     }
-    
-//     // Check if device is already provisioned (has files) or is being newly provisioned
-//     if (authToken == NULL || SPIFFS.exists("/Devsbot_Document.json"))
-//     {
-//         // --- CASE 1: Device is already provisioned and reconnecting ---
-//         if (SPIFFS.exists("/Devsbot_Document.json"))
-//         {
-//             DEBUG("\n========================================");
-//             DEBUG("  START: Post-Connection Setup  ");
-//             DEBUG("========================================");
-//             DEBUG("Device file available. Initializing...");
-
-//             // 1. Initialize Meter Configuration
-//             if (SPIFFS.exists("/meter_Address.json"))
-//             {
-//                 meterAddressData(); // This function now prints its own clean log
-//                 meterAddInSpiff = 1;
-//             }
-//             else
-//             {
-//                 DEBUG("[WARN] meter_Address.json not found! Attempting to fetch...");
-//                 if(meterAddressInit())
-//                 {
-//                     meterAddressData(); // This function now prints its own clean log
-//                 }
-//             }
-            
-//             // 2. Initialize Widget/Pin Configuration
-//             widgetPinInitialize(); // This function now prints its own clean log
-
-//             // 3. Start live connection
-//             socketIOConnection(); // This function prints its own "Attempting to connect..."
-            
-//             DEBUG("MAC ID: "  + String(WiFi.macAddress()));
-            
-//             // [CRITICAL FIX] Removed the call to Loop() here.
-//             // This function will now complete and return, allowing the
-//             // main program loop to run normally.
-
-//             DEBUG("========================================");
-//             DEBUG("   END: Post-Connection Setup   ");
-//             DEBUG("========================================");
-//         }
-//         // --- CASE 2: Device is in developer mode (no files, no auth token) ---
-//         else 
-//         {
-//             DEBUG("\n========================================");
-//             DEBUG("  START: First Time Provisioning (Dev Mode)  ");
-//             DEBUG("========================================");
-//             DEBUG("Device in developer mode. Provisioning...");
-//             if(AuthTokenAPI())
-//             { 
-//                 deviceProvision();
-//                 deviceProvisionData();
-//                 meterAddressInit();
-//                 widgetBegin();
-//             }
-//             DEBUG("Provisioning complete. Restarting...");
-//             ESP.restart();
-//         }
-//     }
-//     // --- CASE 3: Device is being provisioned for the first time with a hardcoded token ---
-//     else 
-//     {
-//         DEBUG("\n========================================");
-//         DEBUG("  START: First Time Provisioning (Token)  ");
-//         DEBUG("========================================");
-//         DEBUG("Auth token provided. Provisioning...");
-//         deviceProvision();
-//         deviceProvisionData();
-//         widgetBegin();
-//         DEBUG("Provisioning complete. Restarting...");
-//         ESP.restart();
-//     }
-// }
-
-
 // In DevsbotEnergyLocal.cpp
 void Devsbot::AuthToken(const char* authToken)
 {
@@ -1793,6 +1448,7 @@ bool Devsbot::deviceProvision()
     return 0;
   }
 }
+
 void Devsbot:: deviceProvisionData()
 {
   DEBUG("deviceProvisionData begin");
@@ -2254,6 +1910,8 @@ void Devsbot::widgetPinInitialize() {
         DEBUG("WidgetData: " + widgetData);
         // Initialize digital inputs using the DigitalInput class
         // Pass the data we just read to the DigitalInput class
+                // --- NEW: Parse and Initialize DIO Module ---
+        parseDIOConfiguration();
         digitalInput.widgetPinInitialize(widgetData); // <--- Pass the string here
 
 
@@ -2269,139 +1927,6 @@ void Devsbot::widgetPinInitialize() {
 }
 
 
-
-// --- 4. MODIFIED sendActivityTrackerData() ---
-// This now saves to the SD card if the live HTTP request fails and includes the pin type.
-// void Devsbot::sendActivityTrackerData() {
-//     // Optimize memory: Declare JsonDocument once outside the loop.
-//     JsonDocument jsonDoc;
-
-//     for (int i = 0; i < digitalInput.getStatusInputCount(); i++) {
-//         StatusInputData* status = digitalInput.getStatusInput(i);
-
-//         // Process only if the status is valid and its state has changed.
-//         if (status && status->stateChanged) {
-            
-//             // a. Prepare the JSON payload.
-//             jsonDoc.clear(); // Clear previous data before reuse.
-//             jsonDoc["slave_id"] = 1;
-//             jsonDoc["gateway_api_id"] = devsbotAuthToken;
-//             jsonDoc["pin"] = status->pin;
-//             jsonDoc["activity_status"] = status->currentState;
-//             jsonDoc["time_stamp"] = status->lastChangeTime;
-
-//             // b. Set the type directly from the enum's integer value.
-//             // This correctly creates a JSON number, e.g., "type": 2, not "type": "2".
-//             // This assumes your enum is defined like: enum InputType { MACHINE = 1, MOTOR = 2, HEATER = 3 };
-//             jsonDoc["type"] = status->type_name; 
-
-//             String jsonString;
-//             serializeJson(jsonDoc, jsonString);
-
-//             DEBUG("Attempting to send LIVE Activity Data: " + jsonString);
-
-//             // c. Try to send the data to the server.
-//             String response = sendHttpRequest(getLedStartStopApiURL(), jsonString, "POST","application/json", "ActivityTrackerData");
-
-//             // d. Check the server response.
-//             JsonDocument responseDoc;
-//             // NEW (Correct)
-//             if (!response.isEmpty() && deserializeJson(responseDoc, response).code() == DeserializationError::Ok && responseDoc["status"] == 200) {
-//                 DEBUG("Live Activity Data sent successfully.");
-                
-//                 // It's important to reset the flag on success, too!
-//                 status->stateChanged = false; 
-
-//             } else {
-//                 // e. If sending failed, save to the SD card as a fallback.
-//                 DEBUG("Live send failed.");
-//                 if (storeDataToSd && card.cardMounted) {
-//                     DEBUG("Saving to SD card.");
-//                     card.statusLogs.saveLog(jsonString);
-//                 } else {
-//                     DEBUG("SD storage disabled or card not mounted. Data was lost.");
-//                 }
-                
-//                 // Reset the flag even on failure to avoid sending the same old data again.
-//                 // You might want to handle this differently, e.g., only reset on success,
-//                 // but that could lead to an infinite loop of trying to send the same failed data.
-//                 status->stateChanged = false;
-//             }
-//         }
-//     }
-// }
-
-
-// // [REPLACE THE ENTIRE FUNCTION]
-// void Devsbot::sendActivityTrackerData() {
-//     // Optimize memory: Declare JsonDocument once outside the loop.
-//     JsonDocument jsonDoc;
-
-//     for (int i = 0; i < digitalInput.getStatusInputCount(); i++) {
-//         StatusInputData* status = digitalInput.getStatusInput(i);
-
-//         // Process only if the status is valid and its state has changed.
-//         if (status && status->stateChanged) {
-
-//             // 1. Prepare payload
-//             jsonDoc.clear(); // Clear previous data before reuse.
-//             jsonDoc["slave_id"] = 1;
-//             jsonDoc["gateway_api_id"] = devsbotAuthToken;
-//             jsonDoc["pin"] = status->pin;
-//             jsonDoc["activity_status"] = status->currentState;
-//             jsonDoc["time_stamp"] = status->lastChangeTime;
-//             jsonDoc["type"] = status->type_name;
-
-//             String jsonString;
-//             serializeJson(jsonDoc, jsonString);
-
-//             // --- THIS IS THE FIX ---
-//             // This new logic ensures all SD card access is thread-safe.
-
-//             if (storeDataToSd && card.cardMounted)
-//             {
-//                 // 2. Always store to SD card first using the MUTEX-PROTECTED wrapper.
-//                 DEBUG("Status change detected. Saving to SD card...");
-//                 // Use the wrapper function from sdcard.cpp
-//                 bool saveSuccess = card.saveStatusLog(jsonString); 
-
-//                 // 3. If WiFi is on AND save was successful, trigger a MUTEX-PROTECTED process.
-//                 if (wifiStatus && saveSuccess) {
-//                     DEBUG("[DI URGENT] Saved. Triggering immediate SD processing...");
-//                     // Use the main, mutex-protected processing function
-//                     card.processStatusLogQueue(); // <-- WITH THIS
-//                     DEBUG("[DI URGENT] Immediate send complete.");
-//                 } else if (!saveSuccess) {
-//                     DEBUG("[DI URGENT] Status save FAILED (mutex busy or card error).");
-//                 } else {
-//                     DEBUG("[DI URGENT] Status saved to SD (WiFi is offline). Will be sent later.");
-//                 }
-//             }
-//             else if (wifiStatus) // Not storing to SD, but WiFi is on
-//             {
-//                 // 4. Fallback to live-only send (this was already correct)
-//                 DEBUG("SD storage disabled. Sending Activity data live...");
-//                 String response = sendHttpRequest(getLedStartStopApiURL(), jsonString, "POST", "application/json", "ActivityTrackerData");
-                
-//                 JsonDocument responseDoc;
-//                 DeserializationError error = deserializeJson(responseDoc, response);
-//                 if (error == DeserializationError::Ok && (responseDoc["status"] == 200 || responseDoc["status"] == 201)) {
-//                     DEBUG("Live Activity Data sent successfully.");
-//                 } else {
-//                     DEBUG("Live Activity Data send failed. Data was lost.");
-//                 }
-//             }
-//             else
-//             {
-//                 DEBUG("SD storage disabled and WiFi offline. Status data lost.");
-//             }
-//             // --- END OF FIX ---
-            
-//             // 5. Reset the flag after attempting to save/send
-//             status->stateChanged = false;
-//         }
-//     }
-// }
 
 // [REPLACE THE ENTIRE sendActivityTrackerData FUNCTION WITH THIS ROBUST VERSION]
 void Devsbot::sendActivityTrackerData() {
@@ -2507,55 +2032,6 @@ void Devsbot::sendAliveStatusData() {
         }
     }
 }
-
-// /**
-//  * @brief Sends a BATCH of historical status data from the SD card.
-//  * @param payload A string containing a JSON array of status log objects.
-//  * @return True if the server accepted the data, false otherwise.
-//  */
-// // --- Batch DI Status Sending ---
-// bool Devsbot::sendDIStatusData(String& payload) {
-//     DEBUG("Sending BATCH of DI Status data from SD card.");
-//     String finalPayload = "device_auth_token=" + devsbotAuthToken + "&status_logs=" + payload;
-//     // *** USE DYNAMIC URL ***
-//     String response = sendHttpRequest(getLedStartStopApiURL(), finalPayload, "POST", "application/x-www-form-urlencoded", "sendDIStatusData_Batch");
-
-//     JsonDocument responseDoc;
-//     // Check for successful response (status 200 or 201)
-//     DeserializationError error = deserializeJson(responseDoc, response);
-//     if (error == DeserializationError::Ok && (responseDoc["status"] == 200 || responseDoc["status"] == 201)) {
-//         DEBUG("Batch DI Status data sent successfully.");
-//         return true;
-//     } else {
-//         DEBUG("Failed to send batch DI Status data. Server response: " + response);
-//         if(error) DEBUG("  - JSON Parse Error: " + String(error.c_str()));
-//         return false;
-//     }
-// }
-
-// /**
-//  * @brief Sends a BATCH of historical pulse data from the SD card.
-//  * @param payload A string containing a JSON array of pulse log objects.
-//  * @return True if the server accepted the data, false otherwise.
-//  */
-// bool Devsbot::sendDIPulseData(String& payload) {
-//     DEBUG("Sending BATCH of DI Pulse data from SD card.");
-//     String finalPayload = "device_auth_token=" + devsbotAuthToken + "&pulse_logs=" + payload;
-//     // *** USE DYNAMIC URL ***
-//     String response = sendHttpRequest(getDevsbotDeviceStatusURL(), finalPayload, "POST", "application/x-www-form-urlencoded", "sendDIPulseData_Batch");
-
-//     JsonDocument responseDoc;
-//     // Check for successful response (status 200 or 201)
-//      DeserializationError error = deserializeJson(responseDoc, response);
-//     if (error == DeserializationError::Ok && (responseDoc["status"] == 200 || responseDoc["status"] == 201)) {
-//         DEBUG("Batch DI Pulse data sent successfully.");
-//         return true;
-//     } else {
-//         DEBUG("Failed to send batch DI Pulse data. Server response: " + response);
-//          if(error) DEBUG("  - JSON Parse Error: " + String(error.c_str()));
-//         return false;
-//     }
-// }
 
 
 
@@ -2797,88 +2273,6 @@ bool Devsbot::checkServerConnection()
 
 
 
-// void Devsbot::Loop() {
-//     //DEBUG("devsbotLoop begin");
-//     currentmillis = millis();
-
-//         // === DIGITAL INPUT PROCESSING ===
-//     digitalInput.processLoop();
-
-
-
-//         // === SEND ACTIVITY TRACKER DATA (5 seconds interval) ===
-//     if (currentmillis - lastActivitySentMillis >= activitySendInterval) {
-//         if (digitalInput.isJobEnabled()) {
-//             sendActivityTrackerData(); // Send only changed status pins
-//         }
-//         lastActivitySentMillis = currentmillis;
-//     }
-
-//     // // === SEND ALIVE STATUS DATA (20 seconds interval) ===
-//     // if (currentmillis - lastDataSentMillis >= dataSendInterval) {
-//     //     DEBUG("Sending alive status data");
-//     //     sendAliveStatusData(); // Send pulse counts
-//     //     lastDataSentMillis = currentmillis;
-//     // }
-
-//     // Skip server operations if in local mode only
-//     if (localModeOnly) {
-//         DEBUG("[Devsbot] Running in local mode - skipping server operations");
-//         // Handle only local operations here
-//         // You can add local device management code here
-//         delay(5000); // Prevent excessive logging
-//         return;
-//     }
-
-
-//     if (!card.isBusy()) {
-//         // === NEW: PROCESS STORED SD CARD DATA ===
-//         if (wifiStatus) {
-//             card.processLogQueues();
-//         }
-        
-//         // === SEND LIVE ACTIVITY TRACKER DATA ===
-//         if (currentmillis - lastActivitySentMillis >= activitySendInterval) {
-//             if (digitalInput.isJobEnabled()) {
-//                 sendActivityTrackerData();
-//             }
-//             lastActivitySentMillis = currentmillis;
-//         }
-
-//         // === HANDLE SOCKET AND HEARTBEAT ===
-//         if (wifiStatus && serverConfigLoaded) {
-//             devsbotStatus();
-//             socketIO.loop();
-//             // // ... (rest of your socket logic) ...
-//             // while(sIOConnectionStatus!=48) // do a safty block of timeout if channel not connected perform timeout block
-//             // {
-//             //   socketIO.loop();
-//             //   delay(100);
-//             //   if (millis() - currentmillis >= (20*1000)) 
-//             //     break;
-          
-//             //   if(sIOConnectionStatus==48)
-//             //     Serial.printf("socketio is connected");
-//             // }
-//             // devsbotAuthentication();
-//         }
-//     }
-//     else if (wifiStatus == 0 && SPIFFS.exists("/network_data.json") && 
-//                millis() - previousmillis1 >= (1000 * 60)) {
-//         DEBUG("***trying to connect with WIFI***\n");
-//         uint64_t premillis1 = millis();
-        
-//         while (wifiStatus != 1) {
-//             wifiConnectionChecking(cnfSsid, cnfPass);
-//             if (storeDataToSd)
-//                 break;
-//         }
-//         vTaskDelay(pdMS_TO_TICKS(1000));
-//         previousmillis1 = currentmillis + (millis() - premillis1);
-//     }
-// }
-
-
 void Devsbot::Loop() {
     currentmillis = millis();
 
@@ -2964,72 +2358,6 @@ void Devsbot::Loop() {
     }
 }
 
-// void Devsbot::Loop() {
-//     currentmillis = millis();
-
-//     // === 1. CORE DEVICE LOGIC (Always Runs) ===
-//     // This logic runs on every loop iteration, regardless of network status.
-//     digitalInput.processLoop();
-
-//     // --- sendActivityTrackerData() call is REMOVED from here ---
-//     // It is now in its own task (activityTask) on Core 0.
-
-//     // === 2. LOCAL MODE CHECK (Early Return) ===
-//     // If no server configuration was loaded, we operate in a limited local mode.
-//     if (localModeOnly) {
-//         // This debug message and delay prevent spamming the serial monitor in local mode.
-//         // vTaskDelay is better than delay()
-//         vTaskDelay(pdMS_TO_TICKS(5000));
-//         return;
-//     }
-
-//     // === 3. WIFI STATE MANAGEMENT (Non-Blocking) ===
-//     // This block continuously manages the WiFi connection state.
-//     if (wifiStatus == 0) {
-//         // --- STA is DISCONNECTED ---
-
-//         // a) AP Re-enable Logic
-//         if (!_apEnabled && (millis() - _lastStaDisconnectTime > AP_REENABLE_TIMEOUT_MS)) {
-//             DEBUG("[WiFi] STA disconnected for 5 mins. Re-enabling AP for configuration.");
-//             startAP(); // This also sets the mode to WIFI_AP_STA
-//         }
-
-//         // b) STA Retry Logic
-//         if (!cnfSsid.isEmpty() && (millis() - _lastStaRetryTime > STA_RETRY_INTERVAL_MS)) {
-//             nonBlockingConnectSTA(); // This is a non-blocking connection attempt
-//         }
-
-//     } else {
-//         // --- STA is CONNECTED ---
-
-//         // c) AP Timeout Logic
-//         if (_apEnabled && (millis() - _bootTime > AP_TIMEOUT_MS)) {
-//             DEBUG("[WiFi] STA connected and AP has timed out (10 mins). Disabling AP.");
-//             stopAP(); // This switches the mode to WIFI_STA only
-//         }
-//     }
-
-//     // === 4. ONLINE OPERATIONS ===
-//     // These tasks are only performed when the device is online.
-//     // The main loop is now only responsible for the Socket.IO loop.
-    
-//     // --- card.isBusy() check is REMOVED ---
-//     // --- card.processLogQueues() call is REMOVED ---
-//     // (This is now handled *only* by sdProcessingTask on Core 0)
-
-//     // Heartbeat and Socket.IO only run if initialized, connected, config loaded
-//     if (_isInitialized && wifiStatus && serverConfigLoaded && !_needsPostConnectionSetup) {
-        
-//         // --- devsbotStatus() call is REMOVED from here ---
-//         // (It is now in its own task, heartbeatTask, on Core 0)
-        
-//         socketIO.loop(); // Handle live connection
-    
-//     } else if (wifiStatus && serverConfigLoaded && !_needsPostConnectionSetup) {
-//          // Optional: Log why heartbeat is skipped if needed for debugging
-//          // DEBUG("[Loop] Skipping SocketIO: Not initialized yet.");
-//     }
-// }
 
 /*!
  *    @brief Device verification to establish connection and initiate communication between device and devsbot app
@@ -3082,93 +2410,6 @@ bool Devsbot::canPerformServerOperations() {
  *    @brief The device will send the live status to the devsbot app and get the widget version from the devsbot app server
 */
 
-// void Devsbot::devsbotStatus() 
-// {
-//     // This function no longer needs its own 'statusCnt' or 'doc' variables.
-//     uint64_t devsbotStatus_now = millis();
-
-//     if (!canPerformServerOperations()) {
-//         // DEBUG("[Devsbot] Skipping status update - server operations disabled");
-//         return;
-//     }
-
-//     if ((devsbotStatus_now - devsbotStatus_Time > (heartBeatInterval * 1000)) || (aliveState == true)) {
-//         aliveState = false;
-//         int8_t wifiSignal = WiFi.RSSI();
-        
-//         // --- *** REQUIREMENT 2: Log current pulse count to SD *** ---
-//         digitalInput.logCurrentPulseCountToSD();
-//         // --- *** END OF CHANGE *** ---
-
-//         // 1. Build the request string, just as before.
-//         String devsbotAliveData = "device_auth_token=" + devsbotAuthToken + "&status_Id=1" + "&wifi=" + String(wifiSignal);
-//         if (digitalInput.getPulseInputCount() > 0) {
-//             PulseInputData* pulse = digitalInput.getPulseInput(0);
-//             if (pulse) {
-//                 devsbotAliveData += "&pulse=" + String(pulse->pulseCount);
-//             }
-//         }
-
-//         devsbotStatus_Time = devsbotStatus_now;
-        
-//         // --- THIS IS THE CRITICAL CHANGE ---
-//         // 2. Make the real HTTP request to the server. The hardcoded line is removed.
-//         String statusResponse = sendHttpRequest(getDevsbotDeviceStatusURL(), devsbotAliveData, "POST","application/x-www-form-urlencoded", "devsbotStatus_Heartbeat");
-        
-//         // 3. Add robust error handling. If the request failed or the response is not valid JSON, stop here.
-//         if (statusResponse.isEmpty() || !statusResponse.startsWith("{")) {
-//             DEBUG("Heartbeat failed or received invalid response. Will retry on next interval.");
-//             // If the response is an error code like "-11" or "WIFI_DISCONNECTED", it will be logged by sendHttpRequest.
-//             return; 
-//         }
-//         // --- END OF CHANGE ---
-
-//        // --- THREAD-SAFE FIX ---
-//         DynamicJsonDocument doc(512);
-//         // --- END OF FIX ---
-
-//         DeserializationError error = deserializeJson(doc, statusResponse);
-//         if (error) {
-//             DEBUG("Failed to parse JSON from heartbeat response: " + statusResponse);
-//             return;
-//         }
-
-//         int statusJson = doc["status"].as<int>();
-//         if (statusJson == 201) 
-//         {
-//             // The rest of your proven logic remains exactly the same.
-//             devsbotFirmwareVersion = doc["device_version"].as<float>();
-//             SendDataToServer = doc["active"];
-            
-//             JsonArray jsonConfigArray = doc["config"];
-//             for (int i = 0; i < jsonConfigArray.size(); i++) {
-//                 configArray[i] = jsonConfigArray[i];
-//             }
-
-//             String newJobStr = doc["job_status"].as<String>();
-//             bool newJobState = (newJobStr == "1");
-//             bool currentJobState = digitalInput.isJobEnabled();
-
-//             if (newJobState != currentJobState) {
-//                 DEBUG("Job status has changed. Processing response...");
-//                 digitalInput.processAliveStatusResponse(statusResponse);
-//             }
-
-//             if (digitalInput.getPulseInputCount() > 0) {
-//                 PulseInputData* pulse = digitalInput.getPulseInput(0);
-//                 if (pulse) {
-//                     pulse->lastSentCount = pulse->pulseCount;
-//                 }
-//             }
-            
-//             widgetUpdate();
-//         } else {
-//             // Log if the server returns a status other than 201
-//             DEBUG("Heartbeat response received, but status was not 201.");
-//             deviceLog("Heartbeat response status: " + String(statusJson));
-//         }
-//     }
-// }
 
 // --- Replace the entire devsbotStatus() function with this new version ---
 void Devsbot::devsbotStatus() 
@@ -3259,16 +2500,54 @@ void Devsbot::devsbotStatus()
             int newJobId = doc["job_id"] | 0; // Get job_id from success response
             bool currentJobState = digitalInput.isJobEnabled();
 
-            // if (newJobState != currentJobState || newJobId != digitalInput.isJobEnabled()) {
-            //     DEBUG("Job status or ID has changed. Processing response...");
-            //     digitalInput.processAliveStatusResponse(statusResponse);
-            // }
             if (newJobState != currentJobState || newJobId != digitalInput.getCurrentJobId()) {
-            // --- END MODIFICATION ---
-
                 DEBUG("Job status or ID has changed. Processing response...");
                 digitalInput.processAliveStatusResponse(statusResponse);
             }
+
+            // --- NEW: Handle DIO Module Controllers ---
+            // Logic: Check 'relay_status' for state (0/1) and apply to all addresses in 'controllers'
+            if (dioModule.isEnabled() && doc.containsKey("controllers")) {
+                JsonArray controllers = doc["controllers"];
+                if (controllers.size() > 0) {
+                    
+                    // 1. Get the command state from the root JSON object
+                    // "relay_status": "0" -> OFF, "1" -> ON
+                    String relayStatusStr = doc["relay_status"].as<String>();
+                    bool commandState = (relayStatusStr == "1");
+                    
+                    DEBUG("[DIO] Received controllers command. Relay Status: " + String(commandState ? "ON" : "OFF"));
+                    
+                    for (JsonObject ctrl : controllers) {
+                        uint16_t addr = ctrl["address"];
+                        int offset = ctrl["offset"];
+                        
+                        // The 'value' inside controller is just a tag (e.g. "R1" or "R1,R2,R3"), ignore for logic.
+                        // Use the global 'commandState' derived from 'relay_status'.
+
+                        if (offset == 0) {
+                            // Single Write
+                            dioModule.writeSingleOutput(addr, commandState);
+                        } else if (offset > 0) {
+                            // Block Write Logic
+                            // We need to write 'commandState' to 'offset' number of consecutive coils starting from 'addr'
+                            
+                            // Create a temporary array of bools with the same state
+                            // Max reasonable offset for safety, e.g., 16
+                            if (offset > 16) offset = 16; 
+                            
+                            bool states[offset];
+                            for(int k=0; k<offset; k++) {
+                                states[k] = commandState;
+                            }
+                            
+                            DEBUG("[DIO] Block Write: " + String(offset) + " coils from addr " + String(addr));
+                            dioModule.writeMultipleOutputs(addr, offset, states);
+                        }
+                    }
+                }
+            }
+            // -------------------------------------------
 
 
             // Update last sent count *only on success*
@@ -3382,36 +2661,7 @@ bool Devsbot::acknowldgeApi(uint8_t value)
     return 0;
 }
 
-// bool Devsbot::meterAddressInit()
-// {
-//   DEBUG("meter Address Init api\n");
-//   byte addressCnt=0;
-  
-//   // Use dynamic URL instead of hardcoded meterAddressURL
-//   String meterInitAPI = getMeterAddressURL() + "?gateway_api_Id=" + String(devsbotAuthToken);
 
-//   DEBUG("meterInit Api request to server => "+ meterInitAPI + "\n");   
-
-//   String meterAddResponse = sendHttpRequest(meterInitAPI, "", "GET","application/x-www-form-urlencoded", "meterAddressInit");
-//   if(meterAddResponse!="" && meterAddResponse.startsWith("{"))
-//   {
-//     File file = SPIFFS.open("/meter_Address.json", "w");
-//     if (!file) 
-//     {
-//       DEBUG("Failed to open meter_Address file for writing");
-//       return 0;
-//     }
-//     file.print(meterAddResponse);
-//     file.close();
-//     return 1;
-//   }
-//   else
-//   {
-//     DEBUG("meteraddr api responsecode: " + meterAddResponse);
-//     DEBUG("meteraddr api responsecode: " + meterAddResponse);
-//     return 0;
-//   }
-// }
 
 // *** MODIFIED meterAddressInit function ***
 bool Devsbot::meterAddressInit()
@@ -3462,155 +2712,6 @@ bool Devsbot::meterAddressInit()
     }
 }
 
-
-// void Devsbot::meterAddressData()
-// {
-//     DEBUG("meter Address data");
-//     String addressData="";
-//     File file = SPIFFS.open("/meter_Address.json", "r");
-
-//     if (!file) 
-//     {
-//       DEBUG("Failed to open meter_Address file for reading");
-//       if(!notConnetedtoNetwork)
-//         DEBUG("Failed to open meter_Address file for reading");
-//       return;
-//     }
-
-//     while (file.available())
-//     {
-//       addressData= file.readStringUntil('\n');
-//     }    
-//     file.close();
-
-//     DEBUG("address data : " + addressData);
-//     // --- THREAD-SAFE FIX ---
-//     DynamicJsonDocument doc(2048);
-//     // --- END OF FIX ---
-
-//     DeserializationError error = deserializeJson(doc,addressData);
-
-//     if (error)
-//     {
-//       DEBUG(F("deserializeJson() failed: meterAddressData"));DEBUG(error.f_str());
-//       if(!notConnetedtoNetwork)
-//         DEBUG("deserializeJson() failed: meterAddressData" + String(error.f_str()));
-//       return;
-//     }
-
-    
-
-//     int statusMtrAdd = doc["status"].as<int>();
-    
-//     if(statusMtrAdd == 200)
-//     {
-//       JsonArray jsonslaveid = doc["slave_id"];
-
-//       for (uint8_t i = 0; i < jsonslaveid.size(); i++) 
-//       {
-//         slaveIdArray[i] = jsonslaveid[i]; // Assuming values are within the byte range (0-255)
-//         Serial.println(slaveIdArray[i]); // Printing the values to the serial monitor
-//       }
-
-//       numSlave=jsonslaveid.size();
-//       Serial.print("no of slaves : ");Serial.println(numSlave);
-
-
-//       JsonArray conf = doc["conf"];
-//       int i;
-//       byte objIndex=0;
-//       for (JsonObject item : conf) 
-//       {
-//         Serial.print("objindex : ");Serial.println(objIndex);
-//         JsonArray mtrAdd = item["address"];
-//         JsonArray regLen= item["offset"];
-//         JsonArray pins=item["pin"];
-//         JsonArray type=item["datatype"];
-//         JsonArray rybVal=item["params"];
-//         JsonArray typeOfReg=item["holding_register"];
-//         JsonArray endianess=item["endianness"];
-//         JsonArray arrProgram=item["program"];
-
-
-//         energy.baudRate=item["baudrate"].as<unsigned long>();
-//         const char *tempch=item["parity"];
-//         if(tempch!=NULL)
-//         {
-//           energy.parityStopbit=strtoul(tempch,NULL,16);
-//           Serial.print("parity and stop bit : " );Serial.println(energy.parityStopbit);
-//           if(objIndex==0) //need to call only once
-//             energy.serialInit();
-//         }
-
-//         // mtrparam[objIndex].regType=item["holding_register"];
-//         // mtrparam[objIndex].endian=item["endianness"];
-//         mtrparam[objIndex].size=mtrAdd.size();
-//         mtrparam[objIndex].sizevPins=pins.size();
-
-//         Serial.print("size of vpins : ");Serial.println(pins.size());
-//         Serial.print("size of rybVal : ");Serial.println(rybVal.size());
-//         Serial.print("no of address : ");Serial.println(mtrAdd.size());
-//         Serial.print("no of data type : ");Serial.println(type.size());
-
-//         for(i=0;i<type.size();i++)
-//         {
-//           mtrparam[objIndex].dataType[i]=type[i];
-//           Serial.print("data type : ");Serial.println(mtrparam[objIndex].dataType[i]);
-//         }
-
-//         for (i = 0; i < mtrAdd.size(); i++) 
-//         {
-//           mtrparam[objIndex].noRegToRead[i]=regLen[i];
-//           mtrparam[objIndex].regAddr[i] = mtrAdd[i]; // Assuming values are within the byte range (0-255)
-//           mtrparam[objIndex].regType[i] = typeOfReg[i];
-//           mtrparam[objIndex].endian[i] = endianess[i];
-//           mtrparam[objIndex].operation[i]=arrProgram[i];
-//           //Serial.println(energy.regAddr[i]); // Printing the values to the serial monitor
-//           Serial.print("regAdd : ");Serial.println( mtrparam[objIndex].regAddr[i]);
-//           Serial.print("noRegToRead : ");Serial.println( mtrparam[objIndex].noRegToRead[i]);
-//           Serial.print("RegType : ");Serial.println( mtrparam[objIndex].regType[i]);
-//           Serial.print("endianess : ");Serial.println( mtrparam[objIndex].endian[i]);
-//           Serial.print("operation : ");Serial.println( mtrparam[objIndex].operation[i]);
-
-//         }
-
-//         for (i = 0; i <pins.size(); i++) 
-//         {
-//           const char* ptrpin = pins[i];
-//           mtrparam[objIndex].vPins[i]= strdup(ptrpin);
-//           mtrparam[objIndex].noParam[i]  =rybVal[i];
-//           Serial.print("vpins : ");Serial.println(mtrparam[objIndex].vPins[i]);
-//           Serial.print("noofparams : ");Serial.println(mtrparam[objIndex].noParam[i]);
-//         }
-//         objIndex++;
-//         Serial.print("obj index at last :");Serial.println(objIndex);
-//         Serial.println();
-//       }
-//     }
-//     else
-//     {
-//       if(!notConnetedtoNetwork)
-//         deviceLog("meterAddrdata status key is not 200");
-//     }
-
-//     if(!notConnetedtoNetwork)
-//       deviceLog("meterAddrdata config successfully status key: " + String(statusMtrAdd));
-
-//         if(SPIFFS.exists("/meter_Address.json")) {
-//         File file = SPIFFS.open("/meter_Address.json", "r");
-//         String addressData = file.readString();
-//         file.close();
-        
-//         // Parse the configuration for QC testing
-//         parseMeterConfiguration();
-        
-//         // Initialize RS485 configuration
-//         initializeRS485Config();
-        
-//         // ... rest of existing implementation
-//     }
-//     Serial.printf("meter Address data end\n");
-// }
 
 
 // *** MODIFIED meterAddressData function ***
@@ -3844,66 +2945,6 @@ void Devsbot::meterAddressData()
     DEBUG("========================================");
 }
 
-/*void Devsbot::sensorInput()
-{
-  //DEBUG("sensorInput begin");
-
-  // if (deviceWidgetVersion == devsbotWidgetVersion)
-  // {
-    if(digitalInputPin != NULL)
-    {
-      DEBUG("Digital Sensor Pins=> "+ digitalInputPin+"\n");
-
-      char dataPin[digitalInputPin.length() + 1];
-      digitalInputPin.toCharArray(dataPin, digitalInputPin.length() + 1);
-      const char* digitalSensorInput = strtok(dataPin, ",");
-
-      while (digitalSensorInput != NULL)
-      {
-        String digitalPin= String(digitalSensorInput);
-        jsonInputSend("digitalinput", digitalPin, String(digitalRead(digitalPin.toInt())));
-        //DEBUG("Digital Input data=> "+ String(digitalRead(digitalPin.toInt())));
-        digitalSensorInput = strtok(NULL, ",");
-      }
-    }
-
-    if(digitalInputPullupPin != NULL)
-    {
-      DEBUG("Digital Pullup Sensor Pins=> "+ digitalInputPullupPin+"\n");
-
-      char dataPin[digitalInputPullupPin.length() + 1];
-      digitalInputPullupPin.toCharArray(dataPin, digitalInputPullupPin.length() + 1);
-      const char* digitalSensorInputPullup = strtok(dataPin, ",");
-
-      while (digitalSensorInputPullup != NULL)
-      {
-        String digitalPullupPin= String(digitalSensorInputPullup);
-        jsonInputSend("digitalinput", digitalPullupPin, String(digitalRead(digitalPullupPin.toInt())));
-        //DEBUG("Digital Input Pullup data=> "+ String(digitalRead(digitalPullupPin.toInt())));
-        digitalSensorInputPullup = strtok(NULL, ",");
-      }   
-    }
-
-    if(analogInputPin != NULL)
-    {
-      DEBUG("Analog Sensor Pins=> "+ analogInputPin+"\n");
-
-      char dataPin[analogInputPin.length() + 1];
-      analogInputPin.toCharArray(dataPin, analogInputPin.length() + 1);
-      const char* analogSensorInput = strtok(dataPin, ",");
-
-      while (analogSensorInput != NULL)
-      {
-        String analogPin= String(analogSensorInput);
-        jsonInputSend("analoginput", analogPin, String(analogRead(analogPin.toInt())));
-        //DEBUG("Analog Input data=> "+ String(analogRead(analogPin.toInt())));
-        analogSensorInput = strtok(NULL, ",");
-      }  
-    }
-  //}
-  delay(100);
- // DEBUG("sensorInput End\n");
-}*/
 
 
 /*!
